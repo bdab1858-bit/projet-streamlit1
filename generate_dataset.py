@@ -58,7 +58,7 @@ def bulk_generate(num_students=2000, num_modules=200, avg_modules_per_student=6)
     cur.close()
     conn.close()
 
-if __name__ == '_main_':
+if _name_ == 'main':
     print('Generating dataset (this may take a while)')
     bulk_generate(num_students=5000, num_modules=300, avg_modules_per_student=6)
     print('Done')
