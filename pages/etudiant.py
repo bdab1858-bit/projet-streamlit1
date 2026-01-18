@@ -147,7 +147,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 # ================== LOGOUT ==================
 if st.button("🚪 Se déconnecter"):
     st.session_state.clear()
-st.switch_page("app.py")
+st.switch_page("login.py")
 
 # ================== FOOTER ==================
 st.caption("Projet universitaire — Génération automatique des examens")
