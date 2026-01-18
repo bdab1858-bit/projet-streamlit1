@@ -2,112 +2,147 @@ import streamlit as st
 import pandas as pd
 from bd import get_connection
 
-# 🚫 Hide sidebar
+# ================== CONFIGURATION ==================
+st.set_page_config(
+    page_title="Doyen | Supervision Globale",
+    page_icon="📊",
+    layout="wide"
+)
+# ================== HIDE SIDEBAR ==================
 st.markdown("""
 <style>
 [data-testid="stSidebar"] {display: none;}
 </style>
 """, unsafe_allow_html=True)
 
-# Role-based access control
+# 🚫 Masquer la sidebar et styles
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {display: none;}
+    .stApp { background-color: #F8F9FA; }
+    .card {
+        background-color: white;
+        padding: 25px;
+        border-radius: 15px;
+        box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+    }
+    .metric-box {
+        text-align: center;
+        padding: 15px;
+        background-color: #f0f2f6;
+        border-radius: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if st.session_state.get('user_role') != 'doyen':
     st.error("Accès refusé.")
     st.stop()
 
-st.set_page_config(
-    page_title="Doyen",
-    page_icon="📊",
-    layout="wide"
-)
+# ================== RÉCUPÉRATION DES DONNÉES ==================
+try:
+    conn = get_connection()
+    cur = conn.cursor()
 
-# 🔹 Récupérer le nom du doyen
-conn = get_connection()
-cur = conn.cursor()
+    # 1. Infos Doyen
+    cur.execute("SELECT nom FROM professeur WHERE id_prof = %s", (st.session_state.get("user_id"),))
+    res_doyen = cur.fetchone()
+    doyen_nom = res_doyen[0] if res_doyen else "Doyen"
 
-cur.execute(
-    "SELECT nom FROM professeur WHERE id_prof = %s",
-    (st.session_state.get("user_id"),)
-)
-row = cur.fetchone()
-cur.close()
-conn.close()
+    # 2. Liste des départements
+    cur.execute("SELECT id_dept, nom FROM departement ORDER BY nom")
+    depts_data = cur.fetchall()
+    dict_depts = {d[1]: d[0] for d in depts_data} 
+    liste_noms_depts = list(dict_depts.keys())
 
-doyen_nom = row[0] if row else "Doyen"
+    # 3. Nombre TOTAL de salles dans l'université
+    cur.execute("SELECT COUNT(*) FROM salle")
+    total_salles_uni = cur.fetchone()[0]
 
-# ================== HEADER ==================
-st.markdown(f"""
-<div style="
-background: linear-gradient(90deg, #5B9DFF, #6EC6FF);
-padding: 30px;
-border-radius: 20px;
-color: white;
-margin-bottom: 30px;">
-    <h1>📊 Doyen / Vice‑Doyen</h1>
-    <p><b>{doyen_nom}</b></p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ================== KPI ==================
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("""
-    <div class="card">
-        <h3>📘 Examens</h3>
-        <div class="kpi">240</div>
+    # ================== HEADER ==================
+    st.markdown(f"""
+    <div style="background: linear-gradient(90deg, #1E3A8A, #3B82F6); padding: 30px; border-radius: 20px; color: white; margin-bottom: 30px;">
+        <h1>📊 Supervision du Planning Global</h1>
+        <p>Utilisateur : <b>Dr. {doyen_nom}</b> (Doyen)</p>
     </div>
     """, unsafe_allow_html=True)
 
-with col2:
-    st.markdown("""
-    <div class="card">
-        <h3>⚠️ Conflits</h3>
-        <div class="kpi">12</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ================== FILTRE & STATS ==================
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("🔍 Analyse par département")
+    
+    dept_nom_choisi = st.selectbox("Choisir le département à superviser :", ["Tous les départements"] + liste_noms_depts)
 
-with col3:
-    st.markdown("""
-    <div class="card">
-        <h3>🏫 Salles</h3>
-        <div class="kpi">35</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Calcul des salles réservées pour le département choisi
+    if dept_nom_choisi == "Tous les départements":
+        cur.execute("SELECT COUNT(DISTINCT id_salle) FROM examen WHERE id_salle IS NOT NULL")
+    else:
+        id_filtre = dict_depts[dept_nom_choisi]
+        cur.execute("SELECT COUNT(DISTINCT id_salle) FROM examen WHERE id_salle IS NOT NULL AND id_dept = %s", (id_filtre,))
+    
+    salles_reservees = cur.fetchone()[0]
 
-# ================== DATA ==================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("📊 Examens par département")
+    # Affichage des KPIs
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Salles Université", total_salles_uni)
+    with col2:
+        st.metric(f"Salles utilisées ({dept_nom_choisi})", salles_reservees)
+    with col3:
+        dispo = total_salles_uni - salles_reservees
+        st.metric("Salles encore libres", dispo if dispo >= 0 else 0)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-df = pd.DataFrame({
-    "Département": ["Informatique", "Mathématiques", "Physique", "Chimie"],
-    "Examens": [60, 55, 45, 40]
-})
+    # ================== TABLEAU DU PLANNING ==================
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📋 Détails du Planning")
 
-st.bar_chart(df.set_index("Département"))
-st.markdown('</div>', unsafe_allow_html=True)
+    query = """
+        SELECT 
+            d.nom AS "Département",
+            f.nom AS "Formation",
+            m.nom AS "Module",
+            s.nom AS "Salle",
+            c.date_exam AS "Date",
+            c.heure_debut AS "Heure",
+            p.nom AS "Surveillant",
+            e.etat AS "Statut"
+        FROM examen e
+        JOIN module m ON e.id_module = m.id_module
+        JOIN departement d ON e.id_dept = d.id_dept
+        JOIN formation f ON e.id_form = f.id_form
+        LEFT JOIN salle s ON e.id_salle = s.id_salle
+        LEFT JOIN creneau c ON e.id_creneau = c.id_creneau
+        LEFT JOIN surveillance surv ON e.id_examen = surv.id_examen
+        LEFT JOIN professeur p ON surv.id_prof = p.id_prof
+    """
 
-# ================== ACTIONS ==================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("✅ Décisions")
+    if dept_nom_choisi != "Tous les départements":
+        id_filtre = dict_depts[dept_nom_choisi]
+        query += " WHERE d.id_dept = %s"
+        cur.execute(query, (id_filtre,))
+    else:
+        cur.execute(query)
 
-c1, c2 = st.columns(2)
-with c1:
-    st.button("✔️ Valider le planning global")
-with c2:
-    st.button("📄 Exporter le planning (PDF)")
+    rows = cur.fetchall()
+    
+    if rows:
+        df = pd.DataFrame(rows, columns=["Département", "Formation", "Module", "Salle", "Date", "Heure", "Surveillant", "Statut"])
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.warning("Aucun examen trouvé.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.info("Les actions seront effectives après connexion à la base de données.")
-st.markdown('</div>', unsafe_allow_html=True)
+    cur.close()
+    conn.close()
+
+except Exception as e:
+    st.error(f"Erreur : {e}")
+
+# ================== DÉCONNEXION ==================
 if st.button("🚪 Se déconnecter"):
-    # Clear session
-    st.session_state.user_role = None
-    st.session_state.user_id = None
-
-    # Optional: clear all session state
     st.session_state.clear()
-
-    # Redirect to login page
     st.switch_page("pages/login.py")
-# ================== FOOTER ==================
-st.caption("Projet universitaire — Interface décisionnelle du Doyen")
