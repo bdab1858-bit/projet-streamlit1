@@ -1,76 +1,67 @@
-from bd import get_connection
+import psycopg2
+
+def get_connection():
+    return psycopg2.connect(
+        host="localhost", database="edt_universitaire",
+        user="postgres", password="0000", port="5432"
+    )
 
 def count_examens():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM examen;")
-    result = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM examen")
+    res = cur.fetchone()[0]
     cur.close()
     conn.close()
-    return result
-
+    return res
 
 def count_salles():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM salle;")
-    result = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM salle")
+    res = cur.fetchone()[0]
     cur.close()
     conn.close()
-    return result
+    return res
 
-
-def count_etudiants():
+def count_salles_utilisees():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM etudiant;")
-    result = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(DISTINCT id_salle) FROM examen WHERE id_salle IS NOT NULL")
+    res = cur.fetchone()[0]
     cur.close()
     conn.close()
-    return result
+    return res
 
+def count_conflicts():
+    """Compte les examens de la même formation au même créneau"""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT e.id_creneau, mf.id_form
+            FROM examen e
+            JOIN module_formation mf ON e.id_module = mf.id_module
+            WHERE e.id_creneau IS NOT NULL
+            GROUP BY e.id_creneau, mf.id_form
+            HAVING COUNT(*) > 1
+        ) as sub
+    """)
+    res = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return res
 
 def exams_per_day():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT c.date_exam, COUNT(e.id_examen) as nb
+        SELECT c.date_exam, COUNT(e.id_examen) 
         FROM examen e
         JOIN creneau c ON e.id_creneau = c.id_creneau
-        GROUP BY c.date_exam
-        ORDER BY c.date_exam
+        GROUP BY c.date_exam ORDER BY c.date_exam
     """)
-    rows = cur.fetchall()
+    res = cur.fetchall()
     cur.close()
     conn.close()
-    return rows
-
-
-def count_conflicts():
-    """Return number of student-day conflicts (students who have >1 exam same day)."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT COUNT(*) FROM (
-            SELECT i.id_etud, c.date_exam, COUNT(*) as nb
-            FROM inscription i
-            JOIN examen e ON i.id_module = e.id_module
-            JOIN creneau c ON e.id_creneau = c.id_creneau
-            GROUP BY i.id_etud, c.date_exam
-            HAVING COUNT(*) > 1
-        ) t;
-    """)
-    result = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    return result
-
-
-def count_salles_utilisees():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(DISTINCT id_salle) FROM examen WHERE id_salle IS NOT NULL;")
-    result = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    return result
+    return res
