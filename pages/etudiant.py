@@ -1,26 +1,18 @@
 import streamlit as st
 import pandas as pd
-
-from algorithme import generate_exam_schedule, persist_schedule_to_db
-from db_queries import (
-    count_examens,
-    count_salles,
-    count_conflicts,
-    count_salles_utilisees,
-    exams_per_day
-)
-
-# ================== PAGE CONFIG (TOUJOURS EN PREMIER) ==================
-st.set_page_config(
-    page_title="Admin | Optimisation Examens",
-    page_icon="🛠",
-    layout="wide"
-)
+from bd import get_connection
 
 # ================== ROLE CHECK ==================
-if st.session_state.get("user_role") != "admin":
-    st.error("⛔ Accès refusé. Seuls les administrateurs peuvent accéder à cette page.")
+if st.session_state.get("user_role") != "etudiant":
+    st.error("Accès refusé. Cette page est réservée aux étudiants.")
     st.stop()
+
+# ================== PAGE CONFIG ==================
+st.set_page_config(
+    page_title="Étudiant | Emploi du temps",
+    page_icon="🎓",
+    layout="wide"
+)
 
 # ================== HIDE SIDEBAR ==================
 st.markdown("""
@@ -32,122 +24,115 @@ st.markdown("""
 # ================== STYLE ==================
 st.markdown("""
 <style>
-.stApp { background-color: #F1F4F9; font-family: 'Segoe UI', sans-serif; }
+.stApp {
+    background-color: #F1F4F9;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+.card {
+    background-color: white;
+    padding: 28px;
+    border-radius: 16px;
+    box-shadow: 0px 10px 25px rgba(0,0,0,0.08);
+    border-left: 6px solid #4CAF50;
+    margin-bottom: 20px;
+}
 
 .header {
-    background: linear-gradient(90deg, #5B9DFF, #6EC6FF);
-    padding: 30px;
+    background: linear-gradient(90deg, #4CAF50, #66BB6A);
+    padding: 28px;
     border-radius: 20px;
     color: white;
     margin-bottom: 30px;
 }
 
-.card {
-    background-color: white;
-    padding: 25px;
-    border-radius: 20px;
-    box-shadow: 0px 10px 30px rgba(0,0,0,0.1);
-    margin-bottom: 25px;
-}
-
-.kpi {
-    font-size: 36px;
-    font-weight: bold;
-    color: #5B9DFF;
+.info-box {
+    background-color: #E8F5E9;
+    padding: 16px;
+    border-radius: 10px;
+    border-left: 4px solid #4CAF50;
+    margin-bottom: 16px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ================== HEADER ==================
+etudiant_id = st.session_state.get("user_id")
+
 st.markdown("""
 <div class="header">
-    <h1>🛠 Administrateur des Examens</h1>
-    <p>Planification et génération automatique des emplois du temps</p>
+    <h1>🎓 Mon Emploi du Temps</h1>
+    <p>Consultation de vos examens programmés</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ================== KPI ==================
-col1, col2, col3 = st.columns(3)
+# ================== DATA ==================
+try:
+    conn = get_connection()
+    cur = conn.cursor()
 
-with col1:
-    st.markdown(f"""
-    <div class="card">
-        <h3>📘 Examens</h3>
-        <div class="kpi">{count_examens()}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Student info
+    cur.execute("""
+        SELECT nom, prenom
+        FROM etudiant
+        WHERE id_etud = %s
+    """, (etudiant_id,))
+    etud = cur.fetchone()
 
-with col2:
-    st.markdown(f"""
-    <div class="card">
-        <h3>⚠️ Conflits</h3>
-        <div class="kpi">{count_conflicts()}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    if etud:
+        nom, prenom = etud
+        st.markdown(f"""
+        <div class="info-box">
+            <b>Étudiant :</b> {prenom} {nom}
+        </div>
+        """, unsafe_allow_html=True)
 
-with col3:
-    used = count_salles_utilisees()
-    total = count_salles()
-    st.markdown(f"""
-    <div class="card">
-        <h3>🏫 Salles</h3>
-        <div class="kpi">{used} / {total}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ================== EXAMS ==================
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📋 Mes Examens")
 
-# ================== CONFIGURATION ==================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("⚙️ Paramètres")
+    cur.execute("""
+        SELECT
+            m.nom,
+            s.nom,
+            c.date_exam,
+            c.heure_debut,
+            c.heure_fin,
+            p.nom
+        FROM examen e
+        JOIN module m ON e.id_module = m.id_module
+        JOIN salle s ON e.id_salle = s.id_salle
+        JOIN creneau c ON e.id_creneau = c.id_creneau
+        JOIN professeur p ON e.id_prof = p.id_prof
+        JOIN inscription i ON i.id_module = e.id_module
+        WHERE i.id_etud = %s
+        ORDER BY c.date_exam, c.heure_debut
+    """, (etudiant_id,))
 
-periode = st.selectbox("📅 Période", ["Semestre 1", "Semestre 2"])
-duree = st.selectbox("⏱ Durée", ["1h", "1h30", "2h"])
+    exams = cur.fetchall()
 
-st.markdown('</div>', unsafe_allow_html=True)
+    if exams:
+        df = pd.DataFrame(
+            exams,
+            columns=["Module", "Salle", "Date", "Début", "Fin", "Professeur"]
+        )
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("Aucun examen programmé.")
 
-# ================== GENERATION ==================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("🚀 Génération automatique")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-auto_save = st.checkbox("💾 Enregistrer automatiquement en base", value=True)
+    cur.close()
+    conn.close()
 
-if st.button("⚙️ Générer l’emploi du temps"):
-    try:
-        planning = generate_exam_schedule()
-        df = pd.DataFrame(planning)
-
-        if df.empty:
-            st.warning("Aucun examen généré")
-        else:
-            st.success("Emploi du temps généré avec succès")
-
-            st.dataframe(df[["module", "salle", "date", "heure"]], use_container_width=True)
-
-            if auto_save:
-                persist_schedule_to_db(planning)
-                st.success("Emploi du temps enregistré en base")
-
-    except Exception as e:
-        st.error(f"Erreur : {e}")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ================== STATS ==================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("📊 Examens par jour")
-
-rows = exams_per_day()
-if rows:
-    df = pd.DataFrame(rows, columns=["Date", "Examens"])
-    st.bar_chart(df.set_index("Date"))
-else:
-    st.info("Aucune donnée")
-
-st.markdown('</div>', unsafe_allow_html=True)
+except Exception as e:
+    st.error(f"Erreur : {e}")
 
 # ================== LOGOUT ==================
+st.divider()
 if st.button("🚪 Se déconnecter"):
     st.session_state.clear()
-st.switch_page("login.py")
+    st.switch_page("pages/login.py")
 
 # ================== FOOTER ==================
-st.caption("Projet universitaire — Génération automatique des examens")
+st.caption("Projet universitaire — Interface Étudiant")
