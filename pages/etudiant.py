@@ -9,7 +9,7 @@ if st.session_state.get("user_role") != "etudiant":
 
 # ================== PAGE CONFIG ==================
 st.set_page_config(
-    page_title="Étudiant | Emploi du temps",
+    page_title="Étudiant | Mon Planning",
     page_icon="🎓",
     layout="wide"
 )
@@ -24,11 +24,7 @@ st.markdown("""
 # ================== STYLE ==================
 st.markdown("""
 <style>
-.stApp {
-    background-color: #F1F4F9;
-    font-family: 'Segoe UI', sans-serif;
-}
-
+.stApp { background-color: #F1F4F9; }
 .card {
     background-color: white;
     padding: 28px;
@@ -37,7 +33,6 @@ st.markdown("""
     border-left: 6px solid #4CAF50;
     margin-bottom: 20px;
 }
-
 .header {
     background: linear-gradient(90deg, #4CAF50, #66BB6A);
     padding: 28px;
@@ -45,7 +40,6 @@ st.markdown("""
     color: white;
     margin-bottom: 30px;
 }
-
 .info-box {
     background-color: #E8F5E9;
     padding: 16px;
@@ -59,66 +53,63 @@ st.markdown("""
 # ================== HEADER ==================
 etudiant_id = st.session_state.get("user_id")
 
-st.markdown("""
-<div class="header">
-    <h1>🎓 Mon Emploi du Temps</h1>
-    <p>Consultation de vos examens programmés</p>
-</div>
-""", unsafe_allow_html=True)
-
-# ================== DATA ==================
 try:
     conn = get_connection()
     cur = conn.cursor()
 
-    # Student info
+    # 1. Infos Étudiant + Formation + Département
     cur.execute("""
-        SELECT nom, prenom
-        FROM etudiant
-        WHERE id_etud = %s
+        SELECT e.nom, e.prenom, f.nom, d.nom
+        FROM etudiant e
+        JOIN formation f ON e.id_form = f.id_form
+        JOIN departement d ON f.id_dept = d.id_dept
+        WHERE e.id_etud = %s
     """, (etudiant_id,))
-    etud = cur.fetchone()
+    etud_info = cur.fetchone()
 
-    if etud:
-        nom, prenom = etud
+    if etud_info:
+        nom_etud, prenom_etud, nom_form, nom_dept = etud_info
         st.markdown(f"""
+        <div class="header">
+            <h1>🎓 Mon Espace Examen</h1>
+            <p>Étudiant : <b>{prenom_etud} {nom_etud}</b></p>
+        </div>
         <div class="info-box">
-            <b>Étudiant :</b> {prenom} {nom}
+            🏛️ <b>Département :</b> {nom_dept} | 📚 <b>Formation :</b> {nom_form}
         </div>
         """, unsafe_allow_html=True)
 
-    # ================== EXAMS ==================
+    # ================== EXAMENS VALIDÉS ==================
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📋 Mes Examens")
+    st.subheader("📋 Calendrier des Examens")
+    st.info("💡 Seuls les examens validés par l'administration sont affichés ci-dessous.")
 
+    # Requête SQL : Filtre par id_form de l'étudiant ET état = 'Validé'
     cur.execute("""
-        SELECT
-            m.nom,
-            s.nom,
-            c.date_exam,
-            c.heure_debut,
-            c.heure_fin,
-            p.nom
-        FROM examen e
-        JOIN module m ON e.id_module = m.id_module
-        JOIN salle s ON e.id_salle = s.id_salle
-        JOIN creneau c ON e.id_creneau = c.id_creneau
-        JOIN professeur p ON e.id_prof = p.id_prof
-        JOIN inscription i ON i.id_module = e.id_module
-        WHERE i.id_etud = %s
+        SELECT 
+            m.nom AS "Module",
+            s.nom AS "Salle",
+            c.date_exam AS "Date",
+            c.heure_debut AS "Heure",
+            d.nom AS "Département"
+        FROM examen ex
+        JOIN module m ON ex.id_module = m.id_module
+        JOIN departement d ON ex.id_dept = d.id_dept
+        JOIN formation f ON ex.id_form = f.id_form
+        JOIN salle s ON ex.id_salle = s.id_salle
+        JOIN creneau c ON ex.id_creneau = c.id_creneau
+        JOIN etudiant et ON et.id_form = f.id_form
+        WHERE et.id_etud = %s AND ex.etat = 'Validé'
         ORDER BY c.date_exam, c.heure_debut
     """, (etudiant_id,))
 
     exams = cur.fetchall()
 
     if exams:
-        df = pd.DataFrame(
-            exams,
-            columns=["Module", "Salle", "Date", "Début", "Fin", "Professeur"]
-        )
+        df = pd.DataFrame(exams, columns=["Module", "Salle", "Date", "Heure", "Département"])
         st.dataframe(df, use_container_width=True)
     else:
-        st.info("Aucun examen programmé.")
+        st.warning("Aucun examen n'a encore été validé pour votre formation.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -126,13 +117,11 @@ try:
     conn.close()
 
 except Exception as e:
-    st.error(f"Erreur : {e}")
+    st.error(f"Erreur lors de la récupération des données : {e}")
 
 # ================== LOGOUT ==================
-st.divider()
 if st.button("🚪 Se déconnecter"):
     st.session_state.clear()
     st.switch_page("pages/login.py")
 
-# ================== FOOTER ==================
-st.caption("Projet universitaire — Interface Étudiant")
+st.caption("Projet universitaire — Interface de consultation étudiante")
