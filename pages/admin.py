@@ -66,5 +66,5 @@ if rows:
 if st.button("🚪 Se déconnecter"):
     st.session_state.clear()
     st.switch_page("pages/login.py")
-Écrire à 💗💗💗
+
 
