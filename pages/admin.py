@@ -60,3 +60,7 @@ rows = exams_per_day()
 if rows:
     chart_df = pd.DataFrame(rows, columns=["Date", "Nombre"])
     st.bar_chart(chart_df.set_index("Date"))
+    # ================== LOGOUT ==================
+if st.button("🚪 Se déconnecter"):
+    st.session_state.clear()
+    st.switch_page("pages/login.py")
