@@ -1,183 +1,128 @@
 import psycopg2
-from collections import defaultdict
 import random
 
-# ==============================
-# 1️⃣ Connexion PostgreSQL
-# ==============================
 def get_connection():
-    return psycopg2.connect(
-        host="localhost",
-        database="edt_universitaire",
-        user="postgres",
-        password="0000",
-        port="5432"
-    )
+    return psycopg2.connect(host="localhost", database="edt_universitaire", user="postgres", password="0000", port="5432")
 
-conn = get_connection()
-cur = conn.cursor()
+def generate_exam_schedule():
+    conn = get_connection()
+    cur = conn.cursor()
 
-# ==============================
-# 2️⃣ Récupération des données
-# ==============================
+    # 1. Charger TOUS les examens avec les noms et l'HEURE (via JOIN creneau)
+    cur.execute("""
+        SELECT 
+            e.id_examen, m.nom, e.id_form, e.etat, e.id_salle, 
+            e.id_creneau, e.date_examen, s.nom, c.heure_debut
+        FROM examen e 
+        JOIN module m ON e.id_module = m.id_module
+        LEFT JOIN salle s ON e.id_salle = s.id_salle
+        LEFT JOIN creneau c ON e.id_creneau = c.id_creneau
+    """)
+    examens_db = cur.fetchall()
 
-# Examens (sans nb_etudiants)
-cur.execute("""
-    SELECT id_examen, id_module
-    FROM examen
-""")
-examens = cur.fetchall()
+    # 2. Charger les ressources disponibles
+    cur.execute("SELECT id_creneau, date_exam, heure_debut FROM creneau")
+    creneaux_db = cur.fetchall()
+    
+    cur.execute("SELECT id_salle, nom, capacite FROM salle")
+    salles = cur.fetchall()
 
-# Salles
-cur.execute("SELECT id_salle, capacite FROM salle")
-salles = cur.fetchall()
+    cur.execute("SELECT id_prof, nom FROM professeur WHERE role = 'enseignant'")
+    enseignants = cur.fetchall()
 
-# Professeurs (CORRIGÉ)
-cur.execute("SELECT id_prof, id_dept FROM professeur")
-profs = cur.fetchall()
+    cur.execute("SELECT id_form, COUNT(id_etud) FROM etudiant GROUP BY id_form")
+    etudiants_par_form = dict(cur.fetchall())
 
-# Inscriptions
-cur.execute("SELECT id_etud, id_module FROM inscription")
-inscriptions = cur.fetchall()
+    salle_occupee = set()     
+    formation_occupee = set() 
+    prof_occupe = set()
+    planning_final = []
+    a_generer = []
 
-# Nombre d'étudiants par module (CORRIGÉ)
-cur.execute("""
-    SELECT id_module, COUNT(id_etud)
-    FROM inscription
-    GROUP BY id_module
-""")
-nb_etudiants_par_module = dict(cur.fetchall())
+    # 3. BLOQUER les ressources des examens déjà "Validé"
+    for id_ex, nom_mod, id_f, etat, id_s, id_c, d_ex, nom_s, h_debut in examens_db:
+        if etat == 'Validé' and id_s and id_c:
+            salle_occupee.add((id_c, id_s))
+            formation_occupee.add((id_c, id_f))
+            
+            # Récupérer le surveillant actuel
+            cur.execute("""
+                SELECT p.id_prof, p.nom 
+                FROM surveillance sv 
+                JOIN professeur p ON sv.id_prof = p.id_prof 
+                WHERE sv.id_examen = %s
+            """, (id_ex,))
+            prof_data = cur.fetchone()
+            p_id = prof_data[0] if prof_data else None
+            p_nom = prof_data[1] if prof_data else "Aucun"
+            
+            if p_id: prof_occupe.add((id_c, p_id))
 
-# Module → département (CORRIGÉ)
-cur.execute("""
-    SELECT m.id_module, f.id_dept
-    FROM module m
-    JOIN formation f ON m.id_form = f.id_form
-""")
-module_dept = dict(cur.fetchall())
-
-# ==============================
-# 3️⃣ Créneaux et structures
-# ==============================
-creneaux = ["08:30-10:00", "10:15-11:45", "12:00-13:30", "13:45-15:15"]
-
-etudiant_jour = defaultdict(set)
-prof_jour = defaultdict(set)
-salle_creneau = defaultdict(set)
-
-planning = []
-surveillance_data = []
-
-# ==============================
-# 4️⃣ Génération gloutonne
-# ==============================
-for id_examen, id_module in examens:
-    placed = False
-    nb_etudiants = nb_etudiants_par_module.get(id_module, 0)
-
-    for c in creneaux:
-
-        # ----- Salle -----
-        salle_id = None
-        for sid, capacite in salles:
-            if c not in salle_creneau[sid] and nb_etudiants <= capacite:
-                salle_id = sid
-                break
-        if salle_id is None:
-            continue
-
-        # ----- Professeur -----
-        prof_id = None
-        random.shuffle(profs)
-        for pid, dept_id in profs:
-            if (
-                c not in prof_jour[pid]
-                and dept_id == module_dept.get(id_module)
-            ):
-                prof_id = pid
-                break
-        if prof_id is None:
-            continue
-
-        # ----- Conflit étudiant -----
-        conflict = False
-        for etud_id, mod in inscriptions:
-            if mod == id_module and c in etudiant_jour[etud_id]:
-                conflict = True
-                break
-        if conflict:
-            continue
-
-        # ----- Placement -----
-        planning.append((id_examen, c, salle_id, prof_id))
-        salle_creneau[salle_id].add(c)
-        prof_jour[prof_id].add(c)
-
-        for etud_id, mod in inscriptions:
-            if mod == id_module:
-                etudiant_jour[etud_id].add(c)
-
-        surveillance_data.append((id_examen, prof_id))
-        placed = True
-        break
-
-    if not placed:
-        print(f"⚠️ Impossible de placer l'examen {id_examen}")
-
-# ==============================
-# 5️⃣ Optimisation locale (SAFE)
-# ==============================
-def calcul_score(pl):
-    score = 0
-    etud_tmp = defaultdict(set)
-
-    for id_exam, c, _, _ in pl:
-        for etud_id, mod in inscriptions:
-            if mod == id_exam:
-                if c in etud_tmp[etud_id]:
-                    score += 10
-                else:
-                    etud_tmp[etud_id].add(c)
-    return score
-
-if len(planning) >= 2:
-    score = calcul_score(planning)
-
-    for _ in range(300):
-        a, b = random.sample(range(len(planning)), 2)
-        planning[a], planning[b] = planning[b], planning[a]
-        new_score = calcul_score(planning)
-
-        if new_score <= score:
-            score = new_score
+            planning_final.append({
+                "id_examen": id_ex, "module": nom_mod, "id_salle": id_s, "salle_nom": nom_s,
+                "date": str(d_ex), "heure": str(h_debut), "id_creneau": id_c, 
+                "id_prof": p_id, "surveillant": p_nom, "etat": "Validé"
+            })
         else:
-            planning[a], planning[b] = planning[b], planning[a]
+            # On stocke pour générer plus tard
+            a_generer.append((id_ex, nom_mod, id_f))
 
-# ==============================
-# 6️⃣ Insertion en base
-# ==============================
-for id_examen, creneau, salle_id, prof_id in planning:
-    cur.execute("""
-        UPDATE examen
-        SET id_salle = %s,
-            id_prof = %s,
-            id_creneau = (
-                SELECT id_creneau
-                FROM creneau
-                WHERE horaire = %s
-            )
-        WHERE id_examen = %s
-    """, (salle_id, prof_id, creneau, id_examen))
+    # 4. GÉNÉRER UNIQUEMENT POUR "EN ATTENTE"
+    random.shuffle(creneaux_db)
+    for id_exam, nom_mod, id_form in a_generer:
+        nb_participants = etudiants_par_form.get(id_form, 0)
+        placed = False
+        
+        for id_c, d_exam, h_exam in creneaux_db:
+            if placed: break
+            if (id_c, id_form) in formation_occupee: continue
+            
+            for id_s, nom_salle, cap in salles:
+                if (id_c, id_s) not in salle_occupee and nb_participants <= cap:
+                    # Trouver prof libre
+                    id_surveillant, surveillant_nom = None, "Aucun"
+                    for id_p, nom_p in enseignants:
+                        if (id_c, id_p) not in prof_occupe:
+                            id_surveillant, surveillant_nom = id_p, nom_p
+                            prof_occupe.add((id_c, id_p))
+                            break
+                    
+                    planning_final.append({
+                        "id_examen": id_exam, "module": nom_mod, "id_salle": id_s, "salle_nom": nom_salle,
+                        "date": str(d_exam), "heure": str(h_exam), "id_creneau": id_c,
+                        "id_prof": id_surveillant, "surveillant": surveillant_nom, "etat": "En attente"
+                    })
+                    salle_occupee.add((id_c, id_s))
+                    formation_occupee.add((id_c, id_form))
+                    placed = True
+                    break
+    
+    cur.close()
+    conn.close()
+    return planning_final
 
-for id_examen, id_prof in surveillance_data:
-    cur.execute("""
-        INSERT INTO surveillance (id_examen, id_prof)
-        VALUES (%s, %s)
-        ON CONFLICT DO NOTHING
-    """, (id_examen, id_prof))
-
-conn.commit()
-cur.close()
-conn.close()
-
-print("✅ Planning généré et enregistré avec succès !")
+def persist_schedule_to_db(data):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        for row in data:
+            # On ne met à jour QUE ceux qui sont 'En attente'
+            if row['etat'] == 'En attente':
+                cur.execute("""
+                    UPDATE examen 
+                    SET id_salle = %s, id_creneau = %s, date_examen = %s 
+                    WHERE id_examen = %s
+                """, (row['id_salle'], row['id_creneau'], row['date'], row['id_examen']))
+                
+                if row['id_prof']:
+                    # On remplace la surveillance pour cet examen
+                    cur.execute("DELETE FROM surveillance WHERE id_examen = %s", (row['id_examen'],))
+                    cur.execute("INSERT INTO surveillance (id_prof, id_examen) VALUES (%s, %s)", 
+                                (row['id_prof'], row['id_examen']))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Erreur: {e}")
+    finally:
+        cur.close()
+        conn.close()
