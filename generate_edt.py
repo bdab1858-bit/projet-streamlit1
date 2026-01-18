@@ -2,8 +2,13 @@ import psycopg2
 import random
 
 def get_connection():
-    return psycopg2.connect(host="localhost", database="edt_universitaire", user="postgres", password="0000", port="5432")
-
+    return psycopg2.connect(
+        host="dpg-d5lsqtumcj7s73bm6k1g-a.oregon-postgres.render.com",
+        database="edt_universitaire",
+        user="admin",
+        password="8ne6EUYzDjKXxv3d9axZElqbrV7w0skv",
+        port="5432"
+    )
 def generate_exam_schedule():
     conn = get_connection()
     cur = conn.cursor()
