@@ -37,24 +37,24 @@ def count_salles_utilisees():
     return res
 
 def count_conflicts():
-    """Compte les examens de la même formation au même créneau"""
     conn = get_connection()
     cur = conn.cursor()
+    # On ne compte les conflits QUE pour les examens qui ont une salle et un créneau assigné
     cur.execute("""
-        SELECT COUNT(*) FROM (
-            SELECT e.id_creneau, mf.id_form
-            FROM examen e
-            JOIN module_formation mf ON e.id_module = mf.id_module
-            WHERE e.id_creneau IS NOT NULL
-            GROUP BY e.id_creneau, mf.id_form
-            HAVING COUNT(*) > 1
-        ) as sub
+        SELECT COUNT(*) 
+        FROM examen e1
+        JOIN examen e2 ON e1.id_examen < e2.id_examen
+        WHERE e1.id_creneau = e2.id_creneau 
+        AND e1.date_examen = e2.date_examen
+        AND (e1.id_salle = e2.id_salle OR e1.id_form = e2.id_form)
+        AND e1.id_salle IS NOT NULL 
+        AND e1.id_creneau IS NOT NULL
     """)
     res = cur.fetchone()[0]
     cur.close()
     conn.close()
     return res
-
+    
 def exams_per_day():
     conn = get_connection()
     cur = conn.cursor()
